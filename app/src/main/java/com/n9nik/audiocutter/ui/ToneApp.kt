@@ -57,15 +57,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.awaitEachGesture
-import androidx.compose.ui.input.pointer.awaitFirstDown
-import androidx.compose.ui.input.pointer.awaitPointerEvent
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -486,37 +484,28 @@ private fun WaveformCanvas(
             .fillMaxWidth()
             .height(200.dp)
             .pointerInput(durationMs, peaks.size) {
-                // Manual drag handling via ui.input.pointer APIs (avoids the
-                // foundation gestures artifact entirely).
-                awaitEachGesture {
-                    val down = awaitFirstDown()
-                    val w = size.width.toFloat()
-                    if (w > 0) {
+                detectDragGestures(
+                    onDragStart = { offset ->
+                        val w = size.width.toFloat()
                         val sx = startMs.toFloat() / durationMs * w
                         val ex = endMs.toFloat() / durationMs * w
                         activeHandle =
-                            if (abs(down.position.x - sx) <= abs(down.position.x - ex)) 1 else 2
-                        val pointerId = down.id
-                        var dragging = true
-                        while (dragging) {
-                            val event = awaitPointerEvent()
-                            val change = event.changes.firstOrNull { it.id == pointerId }
-                            if (change == null || !change.pressed) {
-                                dragging = false
-                            } else {
-                                val ms = (change.position.x / w * durationMs)
-                                    .toLong().coerceIn(0, durationMs)
-                                if (activeHandle == 1) {
-                                    onRangeChange(ms.coerceIn(0, endMs - 1000), endMs)
-                                } else if (activeHandle == 2) {
-                                    onRangeChange(startMs, ms.coerceIn(startMs + 1000, durationMs))
-                                }
-                                change.consume()
-                            }
+                            if (abs(offset.x - sx) <= abs(offset.x - ex)) 1 else 2
+                    },
+                    onDragEnd = { activeHandle = 0 },
+                    onDragCancel = { activeHandle = 0 },
+                    onDrag = { change, _ ->
+                        val w = size.width.toFloat()
+                        if (w <= 0) return@detectDragGestures
+                        val ms = (change.position.x / w * durationMs)
+                            .toLong().coerceIn(0, durationMs)
+                        if (activeHandle == 1) {
+                            onRangeChange(ms.coerceIn(0, endMs - 1000), endMs)
+                        } else if (activeHandle == 2) {
+                            onRangeChange(startMs, ms.coerceIn(startMs + 1000, durationMs))
                         }
-                        activeHandle = 0
                     }
-                }
+                )
             }
     ) {
         val w = size.width
