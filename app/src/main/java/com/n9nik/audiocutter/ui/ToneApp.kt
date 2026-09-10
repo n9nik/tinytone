@@ -56,6 +56,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.ui.Alignment
@@ -485,6 +486,14 @@ private fun WaveformCanvas(
     modifier: Modifier = Modifier
 ) {
     var activeHandle by remember { mutableStateOf(0) } // 1 = start, 2 = end
+    // The drag gesture block is keyed on (durationMs, peaks.size) so it survives
+    // recompositions mid-drag. That means startMs/endMs/onRangeChange captured
+    // directly would go stale after the first drag (dragging one handle would
+    // then snap the other handle back). rememberUpdatedState keeps them fresh
+    // without restarting the gesture.
+    val currentStartMs by rememberUpdatedState(startMs)
+    val currentEndMs by rememberUpdatedState(endMs)
+    val currentOnRangeChange by rememberUpdatedState(onRangeChange)
     Canvas(
         modifier = modifier
             .fillMaxWidth()
@@ -493,8 +502,8 @@ private fun WaveformCanvas(
                 detectDragGestures(
                     onDragStart = { offset ->
                         val w = size.width.toFloat()
-                        val sx = startMs.toFloat() / durationMs * w
-                        val ex = endMs.toFloat() / durationMs * w
+                        val sx = currentStartMs.toFloat() / durationMs * w
+                        val ex = currentEndMs.toFloat() / durationMs * w
                         activeHandle =
                             if (abs(offset.x - sx) <= abs(offset.x - ex)) 1 else 2
                     },
@@ -506,9 +515,11 @@ private fun WaveformCanvas(
                         val ms = (change.position.x / w * durationMs)
                             .toLong().coerceIn(0, durationMs)
                         if (activeHandle == 1) {
-                            onRangeChange(ms.coerceIn(0, endMs - 1000), endMs)
+                            currentOnRangeChange(
+                                ms.coerceIn(0, currentEndMs - 1000), currentEndMs)
                         } else if (activeHandle == 2) {
-                            onRangeChange(startMs, ms.coerceIn(startMs + 1000, durationMs))
+                            currentOnRangeChange(
+                                currentStartMs, ms.coerceIn(currentStartMs + 1000, durationMs))
                         }
                     }
                 )
