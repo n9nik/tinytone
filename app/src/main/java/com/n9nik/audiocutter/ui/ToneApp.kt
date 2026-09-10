@@ -74,6 +74,7 @@ import androidx.core.content.FileProvider
 import com.n9nik.audiocutter.ads.BannerAd
 import com.n9nik.audiocutter.audio.AudioTrimmer
 import com.n9nik.audiocutter.audio.RingtoneHelper
+import com.n9nik.audiocutter.audio.TrimOutcome
 import com.n9nik.audiocutter.audio.TrimResult
 import com.n9nik.audiocutter.audio.Waveform
 import com.n9nik.audiocutter.audio.WaveformExtractor
@@ -360,13 +361,13 @@ private fun EditorScreen(
                     fadeOutMs = if (fadeOut) 2000 else 0
                 )
             } catch (_: Throwable) {
-                AudioTrimmer.TrimOutcome.Failed("Couldn't cut this file")
+                TrimOutcome.Failed("Couldn't cut this file")
             }
             withContext(Dispatchers.Main) {
                 isTrimming = false
                 when (outcome) {
-                    is AudioTrimmer.TrimOutcome.Ok -> onTrimmed(outcome.result)
-                    is AudioTrimmer.TrimOutcome.Failed -> {
+                    is TrimOutcome.Ok -> onTrimmed(outcome.result)
+                    is TrimOutcome.Failed -> {
                         Toast.makeText(context, outcome.reason, Toast.LENGTH_LONG).show()
                         // Back to the editor so the spinner is always dismissed,
                         // even on failure. User can retry or pick another file.
