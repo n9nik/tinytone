@@ -345,6 +345,10 @@ private fun EditorScreen(
                 isTrimming = false
                 if (result == null) {
                     Toast.makeText(context, "Trim failed for this file", Toast.LENGTH_LONG).show()
+                    // Back to the editor so the "Cutting your audio..." spinner is
+                    // always dismissed, even on failure. User can retry or pick
+                    // another file.
+                    stage = Stage.EDITOR
                 } else {
                     onTrimmed(result)
                 }

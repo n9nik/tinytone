@@ -277,6 +277,7 @@ object AudioTrimmer {
             var outTrack = -1
             var muxerStarted = false
             var decoderDone = false
+            var decoderSawEos = false // decoder output fully drained (EOS seen)
             var encoderDone = false
             var encoderEosSent = false
             val pendingPcm = ArrayDeque<ByteArray>()
@@ -304,8 +305,16 @@ object AudioTrimmer {
                 return outBuf.array()
             }
 
+            // Watchdog: a transcode must finish or fail loudly. This guarantees the
+            // UI's "Cutting your audio..." spinner can never spin forever.
+            val deadlineMs = android.os.SystemClock.elapsedRealtime() +
+                maxOf(120_000L, (range.endMs - range.startMs) * 5)
+
             // Main pump loop.
             while (!encoderDone) {
+                if (android.os.SystemClock.elapsedRealtime() > deadlineMs) {
+                    throw IllegalStateException("Audio transcode timed out")
+                }
                 // Feed decoder input.
                 if (!decoderDone) {
                     val inIdx = decoder.dequeueInputBuffer(10_000)
@@ -339,28 +348,15 @@ object AudioTrimmer {
                     }
                     decoder.releaseOutputBuffer(outIdx, false)
                     if (decInfo.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM != 0) {
-                        // Flush remaining PCM into the encoder, then EOS.
-                        while (pendingPcm.isNotEmpty()) {
-                            val inIdx = encoder.dequeueInputBuffer(10_000)
-                            if (inIdx >= 0) {
-                                val chunk = pendingPcm.removeFirst()
-                                val inBuf = encoder.getInputBuffer(inIdx)!!
-                                inBuf.clear()
-                                inBuf.put(chunk)
-                                encoder.queueInputBuffer(inIdx, 0, chunk.size, 0, 0)
-                            }
-                        }
-                        val inIdx = encoder.dequeueInputBuffer(10_000)
-                        if (inIdx >= 0) {
-                            encoder.queueInputBuffer(
-                                inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM
-                            )
-                            encoderEosSent = true
-                        }
+                        // Decoder is fully drained. Encoder EOS is queued below in the
+                        // main loop (retried each pass) so a backed-up codec can never
+                        // wedge us in an unbounded inner feed loop.
+                        decoderSawEos = true
                     }
                     outIdx = decoder.dequeueOutputBuffer(decInfo, 0)
                 }
-                // Move pending PCM into encoder.
+                // Move pending PCM into encoder. Bounded: if the encoder has no free
+                // input buffer we break and retry next pass after draining its output.
                 while (pendingPcm.isNotEmpty()) {
                     val inIdx = encoder.dequeueInputBuffer(0)
                     if (inIdx < 0) break
@@ -369,6 +365,18 @@ object AudioTrimmer {
                     inBuf.clear()
                     inBuf.put(chunk)
                     encoder.queueInputBuffer(inIdx, 0, chunk.size, 0, 0)
+                }
+                // Queue EOS to the encoder exactly once, only after all decoded PCM
+                // has been fed. Retried every pass until it succeeds, so a single
+                // TRY_AGAIN_LATER can never strand the loop without an EOS.
+                if (decoderSawEos && pendingPcm.isEmpty() && !encoderEosSent) {
+                    val inIdx = encoder.dequeueInputBuffer(10_000)
+                    if (inIdx >= 0) {
+                        encoder.queueInputBuffer(
+                            inIdx, 0, 0, 0, MediaCodec.BUFFER_FLAG_END_OF_STREAM
+                        )
+                        encoderEosSent = true
+                    }
                 }
                 // Drain encoder -> muxer.
                 var eIdx = encoder.dequeueOutputBuffer(encInfo, 10_000)
@@ -393,9 +401,6 @@ object AudioTrimmer {
                     outTrack = muxer.addTrack(encoder.outputFormat)
                     muxer.start()
                     muxerStarted = true
-                }
-                if (encoderEosSent && pendingPcm.isEmpty() && !encoderDone) {
-                    // keep draining until EOS surfaces
                 }
             }
 
