@@ -11,7 +11,6 @@ import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Canvas
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -47,6 +46,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -77,6 +77,7 @@ import com.n9nik.audiocutter.audio.RingtoneHelper
 import com.n9nik.audiocutter.audio.TrimResult
 import com.n9nik.audiocutter.audio.Waveform
 import com.n9nik.audiocutter.audio.WaveformExtractor
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -140,7 +141,14 @@ fun ToneApp(
         stage = Stage.PICK
     }
 
-    Column(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
+    // Surface (not a bare Column with .background()) so text picks up the
+    // theme's onBackground content color — otherwise dark mode renders
+    // near-black text on a dark background and nothing is readable.
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = MaterialTheme.colorScheme.background
+    ) {
+    Column(Modifier.fillMaxSize()) {
         Box(Modifier.fillMaxWidth().weight(1f)) {
             when (stage) {
                 Stage.PICK -> PickScreen(onPick = ::pickAudio)
@@ -153,6 +161,7 @@ fun ToneApp(
                             uri = uri,
                             fileName = sourceName,
                             waveform = wf,
+                            trimScope = scope,
                             onBack = ::resetAll,
                             onTrimmed = { result ->
                                 trimResult = result
@@ -183,6 +192,7 @@ fun ToneApp(
             ) { Text("Privacy options") }
         }
         if (adsReady) BannerAd(Modifier.fillMaxWidth())
+    }
     }
 }
 
@@ -276,13 +286,13 @@ private fun EditorScreen(
     uri: Uri,
     fileName: String,
     waveform: Waveform,
+    trimScope: CoroutineScope,
     onBack: () -> Unit,
     onTrimStart: () -> Unit,
     onTrimFailed: () -> Unit,
     onTrimmed: (TrimResult) -> Unit
 ) {
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
     val durationMs = waveform.durationMs
 
     var startMs by remember(waveform) { mutableStateOf(0L) }
@@ -338,22 +348,30 @@ private fun EditorScreen(
         }
         isTrimming = true
         onTrimStart()
-        scope.launch(Dispatchers.Default) {
-            val result = AudioTrimmer.trim(
-                context, uri, range,
-                fadeInMs = if (fadeIn) 2000 else 0,
-                fadeOutMs = if (fadeOut) 2000 else 0
-            )
+        // Launch in trimScope (owned by ToneApp), NOT this composable's own
+        // scope: EditorScreen leaves the composition the moment TRIMMING starts,
+        // which cancels its rememberCoroutineScope() and would swallow the trim
+        // result — the "Cutting your audio..." spinner would spin forever.
+        trimScope.launch(Dispatchers.Default) {
+            val outcome = try {
+                AudioTrimmer.trim(
+                    context, uri, range,
+                    fadeInMs = if (fadeIn) 2000 else 0,
+                    fadeOutMs = if (fadeOut) 2000 else 0
+                )
+            } catch (_: Throwable) {
+                AudioTrimmer.TrimOutcome.Failed("Couldn't cut this file")
+            }
             withContext(Dispatchers.Main) {
                 isTrimming = false
-                if (result == null) {
-                    Toast.makeText(context, "Trim failed for this file", Toast.LENGTH_LONG).show()
-                    // Back to the editor so the "Cutting your audio..." spinner is
-                    // always dismissed, even on failure. User can retry or pick
-                    // another file.
-                    onTrimFailed()
-                } else {
-                    onTrimmed(result)
+                when (outcome) {
+                    is AudioTrimmer.TrimOutcome.Ok -> onTrimmed(outcome.result)
+                    is AudioTrimmer.TrimOutcome.Failed -> {
+                        Toast.makeText(context, outcome.reason, Toast.LENGTH_LONG).show()
+                        // Back to the editor so the spinner is always dismissed,
+                        // even on failure. User can retry or pick another file.
+                        onTrimFailed()
+                    }
                 }
             }
         }
