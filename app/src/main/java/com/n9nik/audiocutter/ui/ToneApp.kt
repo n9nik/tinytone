@@ -157,7 +157,8 @@ fun ToneApp(
                                 trimResult = result
                                 stage = Stage.DONE
                             },
-                            onTrimStart = { stage = Stage.TRIMMING }
+                            onTrimStart = { stage = Stage.TRIMMING },
+                            onTrimFailed = { stage = Stage.EDITOR }
                         )
                     }
                 }
@@ -276,6 +277,7 @@ private fun EditorScreen(
     waveform: Waveform,
     onBack: () -> Unit,
     onTrimStart: () -> Unit,
+    onTrimFailed: () -> Unit,
     onTrimmed: (TrimResult) -> Unit
 ) {
     val context = LocalContext.current
@@ -348,7 +350,7 @@ private fun EditorScreen(
                     // Back to the editor so the "Cutting your audio..." spinner is
                     // always dismissed, even on failure. User can retry or pick
                     // another file.
-                    stage = Stage.EDITOR
+                    onTrimFailed()
                 } else {
                     onTrimmed(result)
                 }
